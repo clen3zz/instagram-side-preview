@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram Side Preview (IG双侧预览)
 // @namespace    https://github.com/clen3zz/
-// @version      5.0
+// @version      5.1
 // @description  IG侧边预览：自动显示上一张/下一张，无需点击箭头。独家修复视频封面黑屏问题（Canvas截图），防闪烁，无缝浏览。
 // @author       clen3zz
 // @match        https://www.instagram.com/*
@@ -328,7 +328,20 @@
         updateContainer(rightC, data.right);
     }
 
+    // 主处理函数（含防抖）
     const process = debounce(() => {
+        // 【新增功能】宽高比检查
+        // 如果 页面高度 > 页面宽度（竖屏模式），则禁用功能并隐藏已有的侧边栏
+        if (window.innerHeight > window.innerWidth) {
+            document.querySelectorAll('.ig-side-container').forEach(container => {
+                container.style.opacity = '0';
+                container.style.display = 'none';
+                container.dataset.activeKey = ''; // 重置状态，确保恢复横屏时能重新渲染
+            });
+            return; // 停止执行后续渲染逻辑
+        }
+
+        // 如果宽度 > 高度，正常渲染
         document.querySelectorAll('article').forEach(renderAll);
     }, 50);
 
@@ -342,6 +355,7 @@
         attributeFilter: ['style', 'src', 'class', 'transform']
     });
 
+    // 监听 scroll 和 resize 都会触发 process，process 内部会自动判断宽高比
     window.addEventListener('scroll', process, { passive: true });
     window.addEventListener('resize', process);
 
