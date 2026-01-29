@@ -1,14 +1,12 @@
 // ==UserScript==
 // @name         Instagram Side Preview (IG双侧预览)
 // @namespace    https://github.com/clen3zz/
-// @version      5.1
-// @description  IG侧边预览：自动显示上一张/下一张，无需点击箭头。独家修复视频封面黑屏问题（Canvas截图），防闪烁，无缝浏览。
+// @version      5.2
+// @description  IG侧边预览：自动显示上一张/下一张。仅在INS主页生效，排除个人主页等子页面。
 // @author       clen3zz
 // @match        https://www.instagram.com/*
 // @grant        GM_addStyle
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/clen3zz/instagram-side-preview/main/instagram-side-preview.user.js
-// @downloadURL  https://raw.githubusercontent.com/clen3zz/instagram-side-preview/main/instagram-side-preview.user.js
 // ==/UserScript==
 
 (function() {
@@ -84,25 +82,16 @@
         };
     }
 
-    /**
-     * 核心函数：从一个容器 DOM 中挖出最佳图片
-     * 无论是视频还是图片，都优先找 img 标签（哪怕是隐藏的）
-     */
     function extractBestSource(container) {
         if (!container) return null;
-
-        // 1. 优先搜索所有 img
         const imgs = Array.from(container.querySelectorAll('img'));
-        // 过滤掉头像和超小图
         const validImgs = imgs.filter(img => {
             const w = img.naturalWidth || img.clientWidth || 0;
             const alt = (img.alt || "").toLowerCase();
             if (alt.includes("profile") || alt.includes("avatar")) return false;
-            // 只要原图够大，哪怕现在 display:none 也是我们要的目标
             return w > 150 || (img.src && img.src.length > 50);
         });
 
-        // 按尺寸排序，取最大的
         if (validImgs.length > 0) {
             validImgs.sort((a, b) => {
                 const wa = a.naturalWidth || 0;
@@ -112,14 +101,11 @@
             return { src: validImgs[0].src, isVideo: false, el: container };
         }
 
-        // 2. 如果真的没有 img，找 video
         const vid = container.querySelector('video');
         if (vid) {
-            // 2.1 优先用 poster
             if (vid.poster && vid.poster.length > 10) {
                 return { src: vid.poster, isVideo: true, el: container };
             }
-            // 2.2 尝试 canvas 截图 (兜底)
             try {
                 if (vid.readyState >= 1) {
                     const canvas = document.createElement('canvas');
@@ -130,29 +116,19 @@
                     if (data.length > 100) return { src: data, isVideo: true, el: container };
                 }
             } catch(e) {}
-
-            // 2.3 实在不行返回占位
             return { src: "PLACEHOLDER", isVideo: true, el: container };
         }
-
         return null;
     }
 
     // ================= 逻辑核心：容器锁定 =================
 
     function getMediaData(article) {
-        // 1. 寻找 List 容器
-        // 尝试寻找包含 transform 的 li 所在的 ul
         let listItems = Array.from(article.querySelectorAll('ul li'));
-
-        // 如果找不到 ul li 结构 (某些单图贴或特殊布局)，尝试找 div 结构
         if (listItems.length < 2) {
-            // 备用方案：直接找所有大图/视频，按几何位置排
             return getMediaDataGeometric(article);
         }
 
-        // 2. 找到“当前显示”的那个 li
-        // 方法：计算每个 li 的中心点，离 article 中心最近的胜出
         const articleRect = article.getBoundingClientRect();
         const centerX = articleRect.left + articleRect.width / 2;
 
@@ -161,13 +137,9 @@
 
         listItems.forEach((li, index) => {
             const rect = li.getBoundingClientRect();
-            // 必须是可视的或者带有 transform 的
-            // 忽略宽度极小的（可能被折叠）
             if (rect.width < 10 && rect.height < 10) return;
-
             const itemX = rect.left + rect.width / 2;
             const diff = Math.abs(itemX - centerX);
-
             if (diff < minDiff) {
                 minDiff = diff;
                 currentIndex = index;
@@ -175,21 +147,15 @@
         });
 
         if (currentIndex === -1) return null;
-
-        // 3. 锁定邻居
-        // 既然我们找到了 Current 的索引，那么 Previous 就是 index-1, Next 就是 index+1
-        // 这比计算坐标要稳定得多！
         const prevLi = listItems[currentIndex - 1];
         const nextLi = listItems[currentIndex + 1];
 
-        // 4. 提取内容
         const leftData = prevLi ? extractBestSource(prevLi) : null;
         const rightData = nextLi ? extractBestSource(nextLi) : null;
 
         return { left: leftData, right: rightData };
     }
 
-    // 备用方案：几何定位 (针对单图或非列表结构)
     function getMediaDataGeometric(article) {
         const medias = Array.from(article.querySelectorAll('img, video'));
         const candidates = medias.filter(el => {
@@ -213,8 +179,8 @@
             else if (diff > threshold) rights.push(item);
         });
 
-        lefts.sort((a,b) => b.rect.left - a.rect.left); // 最靠右
-        rights.sort((a,b) => a.rect.left - b.rect.left); // 最靠左
+        lefts.sort((a,b) => b.rect.left - a.rect.left);
+        rights.sort((a,b) => a.rect.left - b.rect.left);
 
         return {
             left: lefts[0] ? extractBestSource(lefts[0].el.parentElement) : null,
@@ -226,18 +192,12 @@
 
     function createPreview(itemData) {
         if (!itemData) return null;
-
         const div = document.createElement('div');
         div.className = 'ig-side-item';
-
-        // 滚动行为
         div.onclick = (e) => {
             e.stopPropagation();
-            // 尝试找到 IG 的翻页按钮并点击，或者滚动
-            // 简单滚动:
             itemData.el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
         };
-
         if (itemData.src === "PLACEHOLDER") {
             div.innerHTML = `<div class="ig-placeholder">VIDEO PREVIEW</div>`;
         } else {
@@ -245,7 +205,6 @@
             img.src = itemData.src;
             div.appendChild(img);
         }
-
         if (itemData.isVideo) {
             const badge = document.createElement('div');
             badge.className = 'ig-side-video-badge';
@@ -256,8 +215,6 @@
 
     function updateContainer(container, itemData) {
         const timerId = container.dataset.hideTimer;
-
-        // 隐藏
         if (!itemData) {
             if (timerId || container.style.display === 'none') return;
             const tid = setTimeout(() => {
@@ -272,7 +229,6 @@
             return;
         }
 
-        // 显示
         if (timerId) {
             clearTimeout(parseInt(timerId));
             container.removeAttribute('data-hide-timer');
@@ -289,11 +245,9 @@
             return;
         }
 
-        // 更新内容
         const node = createPreview(itemData);
         container.innerHTML = '';
         if (node) container.appendChild(node);
-
         container.style.display = 'flex';
         requestAnimationFrame(() => container.style.opacity = '1');
         container.dataset.activeKey = key;
@@ -301,7 +255,6 @@
 
     function renderAll(article) {
         const data = getMediaData(article);
-
         let leftC = article.querySelector('.ig-side-left');
         let rightC = article.querySelector('.ig-side-right');
 
@@ -323,25 +276,38 @@
             updateContainer(rightC, null);
             return;
         }
-
         updateContainer(leftC, data.left);
         updateContainer(rightC, data.right);
     }
 
+    // ================= 主逻辑控制 =================
+
+    // 辅助：清空所有预览，用于离开主页时
+    function clearAllPreviews() {
+        document.querySelectorAll('.ig-side-container').forEach(container => {
+            container.style.opacity = '0';
+            container.style.display = 'none';
+            container.dataset.activeKey = '';
+        });
+    }
+
     // 主处理函数（含防抖）
     const process = debounce(() => {
-        // 【新增功能】宽高比检查
-        // 如果 页面高度 > 页面宽度（竖屏模式），则禁用功能并隐藏已有的侧边栏
-        if (window.innerHeight > window.innerWidth) {
-            document.querySelectorAll('.ig-side-container').forEach(container => {
-                container.style.opacity = '0';
-                container.style.display = 'none';
-                container.dataset.activeKey = ''; // 重置状态，确保恢复横屏时能重新渲染
-            });
+        // 【核心修改点】1. URL 检查
+        // window.location.pathname === '/' 代表只在主页生效
+        // 这样当你点进个人主页（如 /clen3zz/）时，pathname 不为 /，就会触发清空逻辑
+        if (window.location.pathname !== '/') {
+            clearAllPreviews();
             return; // 停止执行后续渲染逻辑
         }
 
-        // 如果宽度 > 高度，正常渲染
+        // 【核心修改点】2. 宽高比检查（竖屏禁用）
+        if (window.innerHeight > window.innerWidth) {
+            clearAllPreviews();
+            return;
+        }
+
+        // 3. 正常渲染
         document.querySelectorAll('article').forEach(renderAll);
     }, 50);
 
@@ -355,17 +321,15 @@
         attributeFilter: ['style', 'src', 'class', 'transform']
     });
 
-    // 监听 scroll 和 resize 都会触发 process，process 内部会自动判断宽高比
     window.addEventListener('scroll', process, { passive: true });
     window.addEventListener('resize', process);
 
-    // 监听点击事件，如果用户点了下一页箭头，强制刷新
+    // 监听点击事件（兼容IG的SPA跳转）
     document.addEventListener('click', (e) => {
-        // IG 的箭头通常是 button 或 div
-        if (e.target.closest('button') || e.target.role === 'button') {
-            setTimeout(process, 50);
-            setTimeout(process, 300); // 再次检查，防止动画未结束
-        }
+        // 无论是点击箭头，还是点击链接跳转，都触发一次检查
+        // 延迟长一点是为了等待 URL 变化
+        setTimeout(process, 50);
+        setTimeout(process, 300);
     }, true);
 
     process();
